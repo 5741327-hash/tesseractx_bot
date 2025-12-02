@@ -15,7 +15,6 @@ from telegram.ext import (
 import requests
 from bs4 import BeautifulSoup
 
-# Внимание: для работы с OpenAI API требуется установить пакет 'openai'
 from openai import OpenAI 
 
 # --- 1. Настройка и Инициализация ---
@@ -28,8 +27,8 @@ logger = logging.getLogger(__name__)
 try:
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    ADMIN_ID = os.getenv("ADMIN_ID") # ID администратора (строка)
-    CHANNEL_ID = os.getenv("CHANNEL_ID") # ID канала для публикации (строка)
+    ADMIN_ID = os.getenv("ADMIN_ID")
+    CHANNEL_ID = os.getenv("CHANNEL_ID")
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
     if not all([TOKEN, OPENAI_API_KEY, ADMIN_ID, CHANNEL_ID, WEBHOOK_URL]):
@@ -37,12 +36,23 @@ try:
 
 except ValueError as e:
     logger.error(f"ОШИБКА КОНФИГУРАЦИИ: {e}")
+    # Вызываем exit(), чтобы прервать работу, если ключи отсутствуют
     exit()
 
 # Инициализация клиента OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Глобальный словарь для хранения черновика поста для администратора
+# --- ГЛОБАЛЬНАЯ ИНИЦИАЛИЗАЦИЯ (Критично для Gunicorn) ---
+# Gunicorn ожидает увидеть объект 'app' на глобальном уровне.
+try:
+    # Создаем объект Application, который Gunicorn будет использовать как WSGI-приложение
+    app = Application.builder().token(TOKEN).build()
+except Exception as e:
+    logger.error(f"Ошибка при создании объекта Application: {e}")
+    exit()
+# --------------------------------------------------------
+
+# Глобальный словарь для хранения черновика поста
 draft_post = {} 
 
 # --- 2. Декораторы и Управление Доступом ---
@@ -64,8 +74,7 @@ def restricted(func):
 def parse_article(url):
     """Извлекает заголовок и основной текст статьи по URL."""
     try:
-        # Используем User-Agent для обхода простых блокировок
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
 
@@ -74,13 +83,11 @@ def parse_article(url):
         title = soup.find('h1')
         title_text = title.get_text(strip=True) if title else "Заголовок не найден"
 
-        # Поиск основного тела статьи: пробуем общие теги и классы
         article_body = soup.find('article') or soup.find('main') or soup.find('div', class_=re.compile(r'(content|body|post|article)', re.I))
 
         if not article_body:
             return title_text, "Не удалось найти основной блок статьи."
 
-        # Очистка
         for script_or_style in article_body(["script", "style", "nav", "footer"]):
             script_or_style.decompose()
             
@@ -93,13 +100,12 @@ def parse_article(url):
         return "Ошибка парсинга", f"Ошибка запроса или таймаут: {e}"
     except Exception as e:
         logger.error(f"Ошибка при парсинге URL {url}: {e}")
-        return "Ошибка парсинга", f"Произошла непредвиденная ошибка при разборе страницы: {e}"
+        return "Ошибка парсинга", f"Произошла непредвиденная ошибка: {e}"
 
 
 def generate_ai_content(title, raw_text):
     """Обрабатывает текст через GPT-4o для создания поста и промта для DALL-E."""
     
-    # Системный промт для GPT-4o
     system_prompt = (
         "Ты — ведущий научный журналист и редактор популярного Telegram-канала 'Горизонт событий'. "
         "Твоя задача — превратить сырой текст научной новости в увлекательный, легко читаемый пост (максимум 1500 символов). "
@@ -149,7 +155,7 @@ def generate_image_url(dalle_prompt):
         return response.data[0].url
     except Exception as e:
         logger.error(f"Ошибка вызова DALL-E API: {e}")
-        return "https://via.placeholder.com/1024" # Возвращаем заглушку
+        return "https://via.placeholder.com/1024" 
 
 # --- 4. Обработчики Команд ---
 
@@ -165,7 +171,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда для проверки и подтверждения пробуждения сервера (оптимизация Free Tier)."""
+    """Команда для проверки и подтверждения пробуждения сервера."""
     await update.message.reply_text("✨ Сервер активен! Теперь можно отправлять ссылку.")
 
 @restricted
@@ -213,7 +219,6 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
     except Exception as e:
-         # Отправка текста, если изображение не удалось загрузить
         await update.message.reply_text(f"❌ Изображение не загружено. Ошибка: {e}\n\nТекст черновика:\n{caption_draft}", parse_mode='Markdown')
 
 @restricted
@@ -226,7 +231,6 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     try:
-        # Публикация в канал (CHANNEL_ID)
         await context.bot.send_photo(
             chat_id=CHANNEL_ID,
             photo=draft_post['image_url'],
@@ -234,42 +238,37 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
         await update.message.reply_text("🚀 Новость успешно опубликована в канал 'Горизонт событий'!")
-        draft_post = {} # Очищаем черновик
+        draft_post = {}
     except Exception as e:
         await update.message.reply_text(
             f"❌ Ошибка публикации в канал. Проверьте ID канала (`{CHANNEL_ID}`) и права бота: {e}"
         )
 
 
-# --- 5. Функция Запуска (Webhook для Render) ---
+# --- 5. Функция Настройки (Вызывается Gunicorn) ---
 
 def main():
-    """Основная функция для запуска бота и настройки Webhook."""
+    """Настраивает обработчики и Webhook."""
     
-    # Используем порт, который предоставит Render
-    PORT = int(os.environ.get("PORT", "8080")) 
-    
-    app = Application.builder().token(TOKEN).build()
-
     # Регистрация обработчиков
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("publish", publish_post))
-    app.add_handler(CommandHandler("wake", wake)) # <-- Обработчик пробуждения
-    
-    # Обработчик для любых сообщений, содержащих URL
+    app.add_handler(CommandHandler("wake", wake))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'https?://[^\s]+'), handle_link))
     
     logger.info(f"Настройка Webhook по адресу: {WEBHOOK_URL}{TOKEN}")
     
-    # Настройка и запуск Webhook
-    # При каждом старте сервера (в т.ч. после пробуждения) Webhook устанавливается заново
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=TOKEN, 
-        webhook_url=f'{WEBHOOK_URL}{TOKEN}'
-    )
+    # Установка Webhook. Gunicorn запустит приложение, а этот код 
+    # сообщит Telegram, куда отправлять запросы.
+    app.setup_webhook()
+    app.bot.set_webhook(url=f'{WEBHOOK_URL}{TOKEN}')
 
+# --- Точка входа ---
 if __name__ == '__main__':
-    # Эта точка запускается Gunicorn на Render
-    main()
+    # Эта часть запускается только при локальном тесте (НЕ Gunicorn)
+    logger.warning("Код запущен локально. Для Render это не используется.")
+    
+# Gunicorn запускает main() для настройки обработчиков и установки Webhook.
+main()
+
+# После вызова main(), Gunicorn берет объект 'app' и запускает его как веб-сервер.
