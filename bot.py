@@ -36,16 +36,14 @@ try:
 
 except ValueError as e:
     logger.error(f"ОШИБКА КОНФИГУРАЦИИ: {e}")
-    # Вызываем exit(), чтобы прервать работу, если ключи отсутствуют
     exit()
 
 # Инициализация клиента OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- ГЛОБАЛЬНАЯ ИНИЦИАЛИЗАЦИЯ (Критично для Gunicorn) ---
-# Gunicorn ожидает увидеть объект 'app' на глобальном уровне.
+# --- ГЛОБАЛЬНАЯ ИНИЦИАЛИЗАЦИЯ (Критично для Render) ---
+# Создаем объект Application глобально.
 try:
-    # Создаем объект Application, который Gunicorn будет использовать как WSGI-приложение
     app = Application.builder().token(TOKEN).build()
 except Exception as e:
     logger.error(f"Ошибка при создании объекта Application: {e}")
@@ -245,10 +243,10 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# --- 5. Функция Настройки (Вызывается Gunicorn) ---
+# --- 5. Функция Запуска (Webhook для Render) ---
 
 def main():
-    """Настраивает обработчики и Webhook."""
+    """Настраивает обработчики и запускает встроенный веб-сервер."""
     
     # Регистрация обработчиков
     app.add_handler(CommandHandler("start", start))
@@ -258,17 +256,18 @@ def main():
     
     logger.info(f"Настройка Webhook по адресу: {WEBHOOK_URL}{TOKEN}")
     
-    # Установка Webhook. Gunicorn запустит приложение, а этот код 
-    # сообщит Telegram, куда отправлять запросы.
-    app.setup_webhook()
-    app.bot.set_webhook(url=f'{WEBHOOK_URL}{TOKEN}')
+    # Получаем порт, предоставленный Render
+    PORT = int(os.environ.get("PORT", "8080")) 
+
+    # Запускаем встроенный веб-сервер Python-Telegram-Bot
+    # Это заменит Gunicorn, который конфликтовал с app.run_webhook.
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TOKEN,
+        webhook_url=f'{WEBHOOK_URL}{TOKEN}'
+    )
 
 # --- Точка входа ---
 if __name__ == '__main__':
-    # Эта часть запускается только при локальном тесте (НЕ Gunicorn)
-    logger.warning("Код запущен локально. Для Render это не используется.")
-    
-# Gunicorn запускает main() для настройки обработчиков и установки Webhook.
-main()
-
-# После вызова main(), Gunicorn берет объект 'app' и запускает его как веб-сервер.
+    main()
