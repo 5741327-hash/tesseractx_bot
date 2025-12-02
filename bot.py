@@ -41,14 +41,14 @@ except ValueError as e:
 # Инициализация клиента OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- ГЛОБАЛЬНАЯ ИНИЦИАЛИЗАЦИЯ (Критично для Render) ---
-# Создаем объект Application глобально.
+# --- ГЛОБАЛЬНАЯ ИНИЦИАЛИЗАЦИЯ ---
+# Объект Application должен быть глобальным.
 try:
     app = Application.builder().token(TOKEN).build()
 except Exception as e:
     logger.error(f"Ошибка при создании объекта Application: {e}")
     exit()
-# --------------------------------------------------------
+# ----------------------------------
 
 # Глобальный словарь для хранения черновика поста
 draft_post = {} 
@@ -260,7 +260,6 @@ def main():
     PORT = int(os.environ.get("PORT", "8080")) 
 
     # Запускаем встроенный веб-сервер Python-Telegram-Bot
-    # Это заменит Gunicorn, который конфликтовал с app.run_webhook.
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
