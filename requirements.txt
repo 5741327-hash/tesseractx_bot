@@ -1,1 +1,7 @@
+# requirements.txt
+python-telegram-bot
+openai
+requests
+beautifulsoup4
+gunicorn
 
