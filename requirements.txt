@@ -1,5 +1,5 @@
 # requirements.txt
-python-telegram-bot
+python-telegram-bot[webhooks]
 openai
 requests
 beautifulsoup4
