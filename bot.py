@@ -42,7 +42,6 @@ except ValueError as e:
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # --- ГЛОБАЛЬНАЯ ИНИЦИАЛИЗАЦИЯ ---
-# Объект Application должен быть глобальным.
 try:
     app = Application.builder().token(TOKEN).build()
 except Exception as e:
@@ -104,20 +103,21 @@ def parse_article(url):
 def generate_ai_content(title, raw_text):
     """Обрабатывает текст через GPT-4o для создания поста и промта для DALL-E."""
     
-    # КРИТИЧНОЕ ИСПРАВЛЕНИЕ: ЖЕСТКОЕ ОГРАНИЧЕНИЕ ДЛИНЫ ПОСТА ДО 700 СИМВОЛОВ
+    # ИСПРАВЛЕНИЕ: ЖЕСТКОЕ ОГРАНИЧЕНИЕ ДЛИНЫ ПОСТА И УПРОЩЕННЫЙ ФОРМАТ
     system_prompt = (
         "Ты — ведущий научный журналист и редактор популярного Telegram-канала 'Горизонт событий'. "
         "Твоя задача — превратить сырой текст научной новости в увлекательный, легко читаемый пост. "
         "ОБЩАЯ ДЛИНА ГОТОВОГО ПОСТА НЕ ДОЛЖНА ПРЕВЫШАТЬ 700 СИМВОЛОВ (включая пробелы и эмодзи)! " 
-        "Это критически важно из-за ограничения Telegram на подпись к фотографии (caption). "
         "Используй дружелюбный, но информативный тон, добавляй подходящие эмодзи и абзацы. "
         "В конце обязательно сгенерируй детализированный промт на АНГЛИЙСКОМ языке для DALL-E 3. "
+        
+        "СЛЕДУЙ СТРОГО УКАЗАННОМУ НИЖЕ ФОРМАТУ ОТВЕТА. НЕ ДОБАВЛЯЙ НИКАКИХ ДРУГИХ СИМВОЛОВ ИЛИ ПОЯСНЕНИЙ ДО ИЛИ ПОСЛЕ."
         "Заголовок статьи: '{title}'.\n\n"
         "Формат ответа строго следующий:\n"
         "[ПОСТ]\n"
         "Текст готового поста...\n\n"
         "[DALL-E PROMPT]\n"
-        "Текст промта на английском..."
+        "Текст промта на английском."
     ).format(title=title)
     
     try:
@@ -130,13 +130,17 @@ def generate_ai_content(title, raw_text):
         )
         full_response = response.choices[0].message.content
         
-        post_match = re.search(r"\[ПОСТ\]\n(.*?)(?=\n\n\[DALL-E PROMPT\]|$)", full_response, re.DOTALL)
-        prompt_match = re.search(r"\[DALL-E PROMPT\]\n(.*?)$", full_response, re.DOTALL)
+        # УСТОЙЧИВЫЙ ПАРСИНГ: Ищем метки в любом регистре и с любыми пробелами
+        post_match = re.search(r"\[ПОСТ\]\s*(.*?)\s*(?=\[DALL-E PROMPT\]|$)", full_response, re.DOTALL | re.IGNORECASE)
+        prompt_match = re.search(r"\[DALL-E PROMPT\]\s*(.*?)\s*$", full_response, re.DOTALL | re.IGNORECASE)
         
         if post_match and prompt_match:
-            return post_match.group(1).strip(), prompt_match.group(1).strip()
+            post_text = post_match.group(1).strip()
+            dalle_prompt = prompt_match.group(1).strip()
+            return post_text, dalle_prompt
         else:
             logger.error(f"Ошибка парсинга ответа GPT. Ответ: {full_response}")
+            # Возвращаем ошибку форматирования
             return "Ошибка форматирования ответа от AI.", "A simple conceptual image for a science article."
             
     except Exception as e:
@@ -198,7 +202,8 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. Генерация текста и промта
     post_text, dalle_prompt = generate_ai_content(title, article_text)
     
-    if "Произошла ошибка" in post_text:
+    # Проверка на ошибку форматирования
+    if "Ошибка форматирования" in post_text or "Произошла ошибка" in post_text:
         await update.message.reply_text(f"❌ Ошибка генерации AI: {post_text}")
         return
 
@@ -211,7 +216,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global draft_post
     draft_post = {'text': post_text, 'image_url': image_url}
     
-    # ИСПРАВЛЕНИЕ: Более короткий черновик, чтобы не превысить лимит 1024 символа
+    # ИСПРАВЛЕНИЕ: Более короткий черновик
     caption_draft = f"**[Черновик]**\n\n{post_text}\n\n/publish для публикации"
     
     try:
