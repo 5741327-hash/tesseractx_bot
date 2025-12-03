@@ -2,7 +2,8 @@ import os
 import logging
 import re
 from functools import wraps
-from urllib.parse import urljoin # Добавлено для обработки относительных URL
+from urllib.parse import urljoin 
+import random # Импортирован для ротации User-Agent
 
 from telegram import Update
 from telegram.ext import (
@@ -23,6 +24,16 @@ from openai import OpenAI
 # Настройка логирования
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Список актуальных User-Agent'ов для ротации
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+]
+
 
 # Чтение переменных окружения
 try:
@@ -72,9 +83,9 @@ def restricted(func):
 def parse_article(url):
     """Извлекает заголовок и основной текст статьи по URL. Усиленные заголовки для обхода 403."""
     try:
-        # ИСПРАВЛЕНИЕ 1: Усиленные заголовки для обхода блокировки 403 Forbidden
+        # Ротация User-Agent
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'User-Agent': random.choice(USER_AGENTS),
             'Accept-Language': 'en-US,en;q=0.9',
             'Referer': 'https://www.google.com/', 
         }
@@ -108,8 +119,9 @@ def parse_article(url):
 def find_image_in_article(url):
     """Ищет URL главного изображения статьи через мета-теги или в контенте."""
     try:
+        # Ротация User-Agent
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'User-Agent': random.choice(USER_AGENTS),
             'Accept-Language': 'en-US,en;q=0.9',
             'Referer': 'https://www.google.com/',
         }
@@ -126,7 +138,6 @@ def find_image_in_article(url):
         # 2. Поиск первой большой картинки в основном контенте
         article_body = soup.find('article') or soup.find('main')
         if article_body:
-            # Ищем первое изображение, которое, вероятно, является большим
             first_img = article_body.find('img', class_=re.compile(r'(main|hero|featured|post-image)', re.I))
             if first_img and first_img.get('src'):
                 img_src = first_img['src']
@@ -145,7 +156,7 @@ def find_image_in_article(url):
 def generate_ai_content(title, raw_text):
     """Обрабатывает текст через GPT-4o для создания поста и промта для DALL-E."""
     
-    # ИСПРАВЛЕНИЕ: ЖЕСТКОЕ ОГРАНИЧЕНИЕ ДЛИНЫ ПОСТА И УПРОЩЕННЫЙ ФОРМАТ
+    # ЖЕСТКОЕ ОГРАНИЧЕНИЕ ДЛИНЫ ПОСТА И УПРОЩЕННЫЙ ФОРМАТ
     system_prompt = (
         "Ты — ведущий научный журналист и редактор популярного Telegram-канала 'Горизонт событий'. "
         "Твоя задача — превратить сырой текст научной новости в увлекательный, легко читаемый пост. "
@@ -211,21 +222,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✨ Бот 'Горизонт событий' активен!\n\n"
         "👉 **Ваш рабочий процесс (Free Tier):**\n"
         "1. Отправьте **/wake** (если бот долго спал).\n"
-        "2. Отправьте ссылку на статью.\n"
+        "2. Отправьте ссылку на статью (автоматический режим) ИЛИ **скопированный текст статьи** (ручной режим).\n"
         "3. Отправьте **/publish**."
     )
 
 @restricted
 async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда для проверки и подтверждения пробуждения сервера."""
-    await update.message.reply_text("✨ Сервер активен! Теперь можно отправлять ссылку.")
+    await update.message.reply_text("✨ Сервер активен! Теперь можно отправлять ссылку или текст.")
 
 @restricted
-async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает сообщение, содержащее URL (только для админа)."""
+async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает сообщение, содержащее URL (автоматический режим: парсинг + поиск фото в статье/DALL-E)."""
     text = update.message.text
     url_match = re.search(r'https?://[^\s]+', text)
     if not url_match:
+        # Это не должно произойти из-за фильтра, но на всякий случай
         await update.message.reply_text("Пожалуйста, отправьте корректную ссылку.")
         return
 
@@ -247,7 +259,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка генерации AI: {post_text}")
         return
 
-    # --- ИСПРАВЛЕНИЕ 2: ИНТЕЛЛЕКТУАЛЬНЫЙ ПОИСК ИЗОБРАЖЕНИЯ ---
+    # --- ИНТЕЛЛЕКТУАЛЬНЫЙ ПОИСК ИЗОБРАЖЕНИЯ ---
     image_url = find_image_in_article(url)
 
     if image_url:
@@ -261,7 +273,6 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global draft_post
     draft_post = {'text': post_text, 'image_url': image_url}
     
-    # ИСПРАВЛЕНИЕ: Более короткий черновик
     caption_draft = f"**[Черновик]**\n\n{post_text}\n\n/publish для публикации"
     
     try:
@@ -274,12 +285,53 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Изображение не загружено. Ошибка: {e}\n\nТекст черновика:\n{caption_draft}", parse_mode='Markdown')
 
 @restricted
+async def handle_manual_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает длинное текстовое сообщение как сырой текст статьи (ручной режим)."""
+    raw_text = update.message.text
+    
+    # Минимальная длина, чтобы не обрабатывать короткие сообщения как статьи
+    if len(raw_text) < 500: 
+        await update.message.reply_text("🤔 Текст слишком короткий для обработки в ручном режиме. Отправьте ссылку или полный текст статьи (более 500 символов).")
+        return
+
+    await update.message.reply_text("⏳ **Ручной режим активирован.**\n\n1. Передаю текст в GPT-4o...")
+    
+    # 1. Генерация текста и промта
+    title = "Ручная вставка статьи" 
+    post_text, dalle_prompt = generate_ai_content(title, raw_text)
+    
+    if "Ошибка форматирования" in post_text or "Произошла ошибка" in post_text:
+        await update.message.reply_text(f"❌ Ошибка генерации AI: {post_text}")
+        return
+
+    await update.message.reply_text("✅ Текст сгенерирован. 2. Генерирую изображение через DALL-E 3...")
+
+    # 2. Генерация изображения (в ручном режиме всегда используем DALL-E)
+    image_url = generate_image_url(dalle_prompt)
+    
+    # 3. Сохраняем черновик поста и отправляем его администратору
+    global draft_post
+    draft_post = {'text': post_text, 'image_url': image_url}
+    
+    caption_draft = f"**[Черновик]**\n\n{post_text}\n\n/publish для публикации"
+    
+    try:
+        await update.message.reply_photo(
+            photo=image_url,
+            caption=caption_draft,
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Изображение не загружено. Ошибка: {e}\n\nТекст черновика:\n{caption_draft}", parse_mode='Markdown')
+
+
+@restricted
 async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает команду /publish и отправляет пост в канал."""
     
     global draft_post
     if not draft_post or not draft_post.get('text'):
-        await update.message.reply_text("Нет активного черновика для публикации. Отправьте ссылку, чтобы создать новый.")
+        await update.message.reply_text("Нет активного черновика для публикации. Отправьте ссылку или текст, чтобы создать новый.")
         return
         
     try:
@@ -306,7 +358,12 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("publish", publish_post))
     app.add_handler(CommandHandler("wake", wake))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'https?://[^\s]+'), handle_link))
+    
+    # Обработчик 1: Автоматический режим (содержит URL)
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'https?://[^\s]+'), handle_url))
+    
+    # Обработчик 2: Ручной режим (длинный текст БЕЗ URL)
+    app.add_handler(MessageHandler(filters.TEXT & filters.Length(min_length=500) & ~filters.Regex(r'https?://[^\s]+'), handle_manual_text))
     
     logger.info(f"Настройка Webhook по адресу: {WEBHOOK_URL}{TOKEN}")
     
