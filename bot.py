@@ -2,6 +2,7 @@ import os
 import logging
 import re
 from functools import wraps
+from urllib.parse import urljoin # Добавлено для обработки относительных URL
 
 from telegram import Update
 from telegram.ext import (
@@ -66,12 +67,17 @@ def restricted(func):
         return await func(update, context, *args, **kwargs)
     return wrapped
 
-# --- 3. Функции Парсинга и AI ---
+# --- 3. Функции Парсинга, AI и Изображений ---
 
 def parse_article(url):
-    """Извлекает заголовок и основной текст статьи по URL."""
+    """Извлекает заголовок и основной текст статьи по URL. Усиленные заголовки для обхода 403."""
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        # ИСПРАВЛЕНИЕ 1: Усиленные заголовки для обхода блокировки 403 Forbidden
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.google.com/', 
+        }
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
 
@@ -99,6 +105,42 @@ def parse_article(url):
         logger.error(f"Ошибка при парсинге URL {url}: {e}")
         return "Ошибка парсинга", f"Произошла непредвиденная ошибка: {e}"
 
+def find_image_in_article(url):
+    """Ищет URL главного изображения статьи через мета-теги или в контенте."""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.google.com/',
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # 1. Поиск по мета-тегу og:image (самый надежный способ)
+        og_image = soup.find('meta', property='og:image')
+        if og_image and og_image.get('content'):
+            return og_image['content']
+            
+        # 2. Поиск первой большой картинки в основном контенте
+        article_body = soup.find('article') or soup.find('main')
+        if article_body:
+            # Ищем первое изображение, которое, вероятно, является большим
+            first_img = article_body.find('img', class_=re.compile(r'(main|hero|featured|post-image)', re.I))
+            if first_img and first_img.get('src'):
+                img_src = first_img['src']
+                if img_src.startswith('http'):
+                    return img_src
+                
+                # Обработка относительных URL
+                return urljoin(url, img_src)
+                
+    except Exception as e:
+        logger.warning(f"Ошибка при поиске изображения в статье {url}: {e}")
+        return None 
+
+    return None
 
 def generate_ai_content(title, raw_text):
     """Обрабатывает текст через GPT-4o для создания поста и промта для DALL-E."""
@@ -130,7 +172,7 @@ def generate_ai_content(title, raw_text):
         )
         full_response = response.choices[0].message.content
         
-        # УСТОЙЧИВЫЙ ПАРСИНГ: Ищем метки в любом регистре и с любыми пробелами
+        # УСТОЙЧИВЫЙ ПАРСИНГ
         post_match = re.search(r"\[ПОСТ\]\s*(.*?)\s*(?=\[DALL-E PROMPT\]|$)", full_response, re.DOTALL | re.IGNORECASE)
         prompt_match = re.search(r"\[DALL-E PROMPT\]\s*(.*?)\s*$", full_response, re.DOTALL | re.IGNORECASE)
         
@@ -140,7 +182,6 @@ def generate_ai_content(title, raw_text):
             return post_text, dalle_prompt
         else:
             logger.error(f"Ошибка парсинга ответа GPT. Ответ: {full_response}")
-            # Возвращаем ошибку форматирования
             return "Ошибка форматирования ответа от AI.", "A simple conceptual image for a science article."
             
     except Exception as e:
@@ -202,15 +243,19 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. Генерация текста и промта
     post_text, dalle_prompt = generate_ai_content(title, article_text)
     
-    # Проверка на ошибку форматирования
     if "Ошибка форматирования" in post_text or "Произошла ошибка" in post_text:
         await update.message.reply_text(f"❌ Ошибка генерации AI: {post_text}")
         return
 
-    await update.message.reply_text("✅ Текст сгенерирован. 3. Генерирую изображение через DALL-E 3...")
+    # --- ИСПРАВЛЕНИЕ 2: ИНТЕЛЛЕКТУАЛЬНЫЙ ПОИСК ИЗОБРАЖЕНИЯ ---
+    image_url = find_image_in_article(url)
 
-    # 3. Генерация изображения
-    image_url = generate_image_url(dalle_prompt)
+    if image_url:
+        await update.message.reply_text("✅ Изображение найдено в статье. Пропускаю DALL-E.")
+    else:
+        await update.message.reply_text("⚠️ Изображение в статье не найдено. 3. Генерирую изображение через DALL-E 3...")
+        # 3. Генерация изображения (используется только как запасной вариант)
+        image_url = generate_image_url(dalle_prompt)
     
     # 4. Сохраняем черновик поста и отправляем его администратору
     global draft_post
