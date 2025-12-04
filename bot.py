@@ -2,14 +2,14 @@ import os
 import logging
 import re
 from functools import wraps
-from urllib.parse import urljoin 
-import random 
+from urllib.parse import urljoin
+import random
 
 from telegram import Update
 from telegram.ext import (
-    Application, 
-    CommandHandler, 
-    MessageHandler, 
+    Application,
+    CommandHandler,
+    MessageHandler,
     filters,
     ContextTypes
 )
@@ -17,7 +17,7 @@ from telegram.ext import (
 import requests
 from bs4 import BeautifulSoup
 
-from openai import OpenAI 
+from openai import OpenAI
 
 # --- 1. Настройка и Инициализация ---
 
@@ -26,7 +26,7 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # КОНСТАНТА: Максимальная безопасная длина поста, чтобы не превысить лимит Telegram (1024 символа)
-MAX_POST_LENGTH = 800 
+MAX_POST_LENGTH = 800
 
 # Список актуальных User-Agent'ов для ротации
 USER_AGENTS = [
@@ -65,7 +65,7 @@ except Exception as e:
 # ----------------------------------
 
 # Глобальный словарь для хранения черновика поста
-draft_post = {} 
+draft_post = {}
 
 # --- 2. Декораторы и Управление Доступом ---
 
@@ -90,7 +90,7 @@ def parse_article(url):
         headers = {
             'User-Agent': random.choice(USER_AGENTS),
             'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://www.google.com/', 
+            'Referer': 'https://www.google.com/',
         }
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
@@ -152,18 +152,19 @@ def find_image_in_article(url):
                 
     except Exception as e:
         logger.warning(f"Ошибка при поиске изображения в статье {url}: {e}")
-        return None 
+        return None
 
     return None
 
 def generate_ai_content(title, raw_text):
-    """Обрабатывает текст через GPT-4o для создания поста и промта для DALL-E."""
-    
+    """Обрабатывает текст через GPT-4o для создания поста и промта для DALL-E. Добавлено указание использовать Markdown."""
+
     # ЖЕСТКОЕ ОГРАНИЧЕНИЕ ДЛИНЫ ПОСТА В ПРОМТЕ (850)
     system_prompt = (
         "Ты — ведущий научный журналист и редактор популярного Telegram-канала 'Горизонт событий'. "
         "Твоя задача — превратить сырой текст научной новости в увлекательный, легко читаемый пост. "
-        "ОБЩАЯ ДЛИНА ГОТОВОГО ПОСТА НЕ ДОЛЖНА ПРЕВЫШАТЬ 850 СИМВОЛОВ (включая пробелы и эмодзи)! " 
+        "**Обязательно используй Markdown: выделяй ключевые фразы, термины или заголовки с помощью жирного (**текст**) и курсива (*текст*).** " # <--- ИЗМЕНЕНИЕ ЗДЕСЬ
+        "ОБЩАЯ ДЛИНА ГОТОВОГО ПОСТА НЕ ДОЛЖНА ПРЕВЫШАТЬ 850 СИМВОЛОВ (включая пробелы и эмодзи)! "
         "Используй дружелюбный, но информативный тон, добавляй подходящие эмодзи и абзацы. "
         "В конце обязательно сгенерируй детализированный промт на АНГЛИЙСКОМ языке для DALL-E 3. "
         
@@ -215,7 +216,7 @@ def generate_image_url(dalle_prompt):
         return response.data[0].url
     except Exception as e:
         logger.error(f"Ошибка вызова DALL-E API: {e}")
-        return "https://via.placeholder.com/1024" 
+        return "https://via.placeholder.com/1024"
 
 # --- 4. Обработчики Команд ---
 
@@ -303,15 +304,15 @@ async def handle_manual_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
     raw_text = update.message.text
     
     # ПРОВЕРКА ДЛИНЫ: заменяет отсутствующий filters.Length
-    if len(raw_text) < 500: 
+    if len(raw_text) < 500:
         # Игнорируем короткие сообщения, которые не являются командами или URL
-        return 
+        return
 
 
     await update.message.reply_text("⏳ **Ручной режим активирован.**\n\n1. Передаю текст в GPT-4o...")
     
     # 1. Генерация текста и промта
-    title = "Ручная вставка статьи" 
+    title = "Ручная вставка статьи"
     post_text, dalle_prompt = generate_ai_content(title, raw_text)
     
     if "Ошибка форматирования" in post_text or "Произошла ошибка" in post_text:
@@ -389,7 +390,7 @@ def main():
     logger.info(f"Настройка Webhook по адресу: {WEBHOOK_URL}{TOKEN}")
     
     # Получаем порт, предоставленный Render
-    PORT = int(os.environ.get("PORT", "8080")) 
+    PORT = int(os.environ.get("PORT", "8080"))
 
     # Запускаем встроенный веб-сервер Python-Telegram-Bot
     app.run_webhook(
