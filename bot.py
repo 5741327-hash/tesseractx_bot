@@ -4,6 +4,7 @@ import re
 from functools import wraps
 from urllib.parse import urljoin 
 import random 
+import asyncio # Добавляем для использования задержки
 
 from telegram import Update
 from telegram.ext import (
@@ -25,8 +26,7 @@ from openai import OpenAI
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ИЗМЕНЕНИЕ: Новая константа для безопасной длины первой части
-# Устанавливается в 800 символов, чтобы гарантировать, что подпись к фото (caption) не превысит лимит 1024
+# КОНСТАНТА: Максимальная безопасная длина ПЕРВОЙ ЧАСТИ поста (для подписи).
 MAX_CAPTION_LENGTH_AI_TARGET = 800 
 
 # Список актуальных User-Agent'ов для ротации
@@ -66,7 +66,6 @@ except Exception as e:
 # ----------------------------------
 
 # Глобальный словарь для хранения черновика поста
-# Теперь хранит text_part_1, text_part_2, image_url, source_url
 draft_post = {} 
 
 # --- 2. Декораторы и Управление Доступом ---
@@ -164,7 +163,7 @@ def generate_ai_content(title, raw_text):
     Запрашивает разделение поста на две части.
     """
     
-    # ОБНОВЛЕНИЕ ПРОМТА: Требование использовать HTML-форматирование, включить ссылку, и РАЗДЕЛИТЬ НА 2 ЧАСТИ
+    # ОБНОВЛЕНИЕ ПРОМТА: Убрано упоминание ссылки на источник
     system_prompt = (
         "Ты — ведущий научный журналист и редактор популярного Telegram-канала 'Горизонт событий'. "
         "Твоя задача — превратить сырой текст научной новости в увлекательный, легко читаемый пост. "
@@ -173,7 +172,6 @@ def generate_ai_content(title, raw_text):
         "РАЗДЕЛИ ВЕСЬ ТЕКСТ ПОСТА НА ДВЕ ЧАСТИ, используя разделители [ПОСТ ЧАСТЬ 1] и [ПОСТ ЧАСТЬ 2]. "
         f"<b>ПЕРВАЯ ЧАСТЬ</b> должна содержать ключевую информацию (завязку) и иметь длину <b>НЕ БОЛЕЕ {MAX_CAPTION_LENGTH_AI_TARGET} СИМВОЛОВ</b>, чтобы уместиться в подпись к фото. "
         "ВТОРАЯ ЧАСТЬ должна содержать оставшийся, менее критичный, но важный текст. "
-        "НЕ ДОБАВЛЯЙ В КОНЕЦ ПОСТА ССЫЛКУ НА ИСТОЧНИК, ЭТО СДЕЛАЕТ БОТ. "
         "В конце обязательно сгенерируй детализированный промт на АНГЛИЙСКОМ языке для DALL-E 3. "
         
         "СЛЕДУЙ СТРОГО УКАЗАННОМУ НИЖЕ ФОРМАТУ ОТВЕТА. НЕ ДОБАВЛЯЙ НИКАКИХ ДРУГИХ СИМВОЛОВ ИЛИ ПОЯСНЕНИЙ ДО ИЛИ ПОСЛЕ."
@@ -281,7 +279,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     await update.message.reply_text("✅ Статья спарсена. 2. Передаю текст в GPT-4o и запрашиваю разделение поста...")
     
-    # 2. Генерация текста и промта (ОБНОВЛЕНИЕ СИГНАТУРЫ)
+    # 2. Генерация текста и промта
     result = generate_ai_content(title, article_text)
     if isinstance(result, tuple) and len(result) == 3:
         post_part_1, post_part_2, dalle_prompt = result
@@ -307,13 +305,13 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 3. Генерация изображения (используется только как запасной вариант)
         image_url = generate_image_url(dalle_prompt)
     
-    # 4. Сохраняем черновик поста (включая URL и ОБЕ ЧАСТИ) и отправляем его администратору
+    # 4. Сохраняем черновик поста (УБРАН source_url) и отправляем его администратору
     global draft_post
-    # Сохраняем обе части
-    draft_post = {'text_part_1': post_part_1, 'text_part_2': post_part_2, 'image_url': image_url, 'source_url': url}
+    # УДАЛЕН 'source_url'
+    draft_post = {'text_part_1': post_part_1, 'text_part_2': post_part_2, 'image_url': image_url}
     
-    # Формируем подпись для ЧАСТИ 1
-    caption_draft = f"<b>[Черновик]</b>\n\n{post_part_1}\n\n<i>(Читать продолжение в следующем сообщении)</i>\n\n<a href='{url}'>Источник статьи</a>\n\n/publish для публикации"
+    # Формируем подпись для ЧАСТИ 1 (УБРАН текст про источник)
+    caption_draft = f"<b>[Черновик]</b>\n\n{post_part_1}\n\n<i>(Продолжение в следующем сообщении)</i>\n\n/publish для публикации"
     
     try:
         # ИСПОЛЬЗУЕМ HTML
@@ -342,7 +340,7 @@ async def handle_manual_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await update.message.reply_text("⏳ <b>Ручной режим активирован.</b>\n\n1. Передаю текст в GPT-4o и запрашиваю разделение поста...", parse_mode='HTML')
     
-    # 1. Генерация текста и промта (ОБНОВЛЕНИЕ СИГНАТУРЫ)
+    # 1. Генерация текста и промта
     title = "Ручная вставка статьи" 
     result = generate_ai_content(title, raw_text)
     if isinstance(result, tuple) and len(result) == 3:
@@ -363,13 +361,13 @@ async def handle_manual_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # 2. Генерация изображения (в ручном режиме всегда используем DALL-E)
     image_url = generate_image_url(dalle_prompt)
     
-    # 3. Сохраняем черновик поста (здесь source_url отсутствует) и отправляем его администратору
+    # 3. Сохраняем черновик поста (УБРАН source_url) и отправляем его администратору
     global draft_post
-    # Сохраняем обе части
-    draft_post = {'text_part_1': post_part_1, 'text_part_2': post_part_2, 'image_url': image_url, 'source_url': None}
+    # УДАЛЕН 'source_url'
+    draft_post = {'text_part_1': post_part_1, 'text_part_2': post_part_2, 'image_url': image_url}
     
-    # Формируем подпись для ЧАСТИ 1
-    caption_draft = f"<b>[Черновик]</b>\n\n{post_part_1}\n\n<i>(Читать продолжение в следующем сообщении)</i>\n\n/publish для публикации"
+    # Формируем подпись для ЧАСТИ 1 (УБРАН текст про источник)
+    caption_draft = f"<b>[Черновик]</b>\n\n{post_part_1}\n\n<i>(Продолжение в следующем сообщении)</i>\n\n/publish для публикации"
     
     try:
         # ИСПОЛЬЗУЕМ HTML
@@ -394,18 +392,15 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     post_part_1 = draft_post['text_part_1']
     post_part_2 = draft_post['text_part_2']
-    source_url = draft_post.get('source_url')
     
     # 1. Формирование финальной подписи для фото (ЧАСТЬ 1)
     final_caption = post_part_1
     
     # Если есть вторая часть, добавляем приглашение к продолжению
     if post_part_2 and post_part_2.strip():
-        final_caption += "\n\n<i>(Читать продолжение ниже)</i>"
+        final_caption += "\n\n<i>(Продолжение ниже)</i>"
         
-    # Добавляем ссылку на источник
-    if source_url:
-        final_caption += f"\n\n\n<a href='{source_url}'>#Источник</a>"
+    # Логика добавления ссылки на источник УДАЛЕНА.
 
     try:
         # ШАГ 1: Отправляем фото с ЧАСТЬЮ 1
@@ -416,8 +411,10 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
         
-        # ШАГ 2: Если есть ЧАСТЬ 2, отправляем ее отдельным сообщением
+        # ШАГ 2: Если есть ЧАСТЬ 2, отправляем ее отдельным сообщением с ЗАДЕРЖКОЙ
         if post_part_2 and post_part_2.strip():
+             # ДОБАВЛЕНА ЗАДЕРЖКА В 1 СЕКУНДУ для надежного разделения сообщений
+             await asyncio.sleep(1) 
              await context.bot.send_message(
                 chat_id=CHANNEL_ID,
                 text=post_part_2,
