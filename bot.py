@@ -25,8 +25,8 @@ from openai import OpenAI
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# КОНСТАНТА: Максимальная безопасная длина поста. Установлено на 950 для гарантированного запаса (Лимит Telegram 1024)
-MAX_POST_LENGTH = 950
+# КОНСТАНТА: Максимальная безопасная длина поста. Установлено на 850 для гарантированного запаса (Лимит Telegram 1024)
+MAX_POST_LENGTH = 850 
 
 # Список актуальных User-Agent'ов для ротации
 USER_AGENTS = [
