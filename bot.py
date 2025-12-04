@@ -157,13 +157,13 @@ def find_image_in_article(url):
     return None
 
 def generate_ai_content(title, raw_text):
-    """Обрабатывает текст через GPT-4o для создания поста и промта для DALL-E. Добавлено указание использовать Markdown."""
-
+    """Обрабатывает текст через GPT-4o для создания поста и промта для DALL-E. ИСПОЛЬЗУЕТ HTML."""
+    
     # ЖЕСТКОЕ ОГРАНИЧЕНИЕ ДЛИНЫ ПОСТА В ПРОМТЕ (850)
     system_prompt = (
         "Ты — ведущий научный журналист и редактор популярного Telegram-канала 'Горизонт событий'. "
         "Твоя задача — превратить сырой текст научной новости в увлекательный, легко читаемый пост. "
-        "**Обязательно используй Markdown: выделяй ключевые фразы, термины или заголовки с помощью жирного (**текст**) и курсива (*текст*).** " # <--- ИЗМЕНЕНИЕ ЗДЕСЬ
+        "**Обязательно используй HTML-теги: выделяй ключевые фразы, термины или заголовки с помощью <b> (жирный) и <i> (курсив).** " 
         "ОБЩАЯ ДЛИНА ГОТОВОГО ПОСТА НЕ ДОЛЖНА ПРЕВЫШАТЬ 850 СИМВОЛОВ (включая пробелы и эмодзи)! "
         "Используй дружелюбный, но информативный тон, добавляй подходящие эмодзи и абзацы. "
         "В конце обязательно сгенерируй детализированный промт на АНГЛИЙСКОМ языке для DALL-E 3. "
@@ -222,6 +222,7 @@ def generate_image_url(dalle_prompt):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает команду /start."""
+    # Обратите внимание: здесь используется Markdown, так как это статичный текст без AI форматирования.
     await update.message.reply_text(
         "✨ Бот 'Горизонт событий' активен!\n\n"
         "👉 **Ваш рабочий процесс (Free Tier):**\n"
@@ -245,7 +246,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     url = url_match.group(0)
-    await update.message.reply_text(f"⏳ **Начинаю обработку ссылки:** `{url}`\n\n1. Парсинг статьи...", parse_mode='Markdown')
+    await update.message.reply_text(f"⏳ <b>Начинаю обработку ссылки:</b> <code>{url}</code>\n\n1. Парсинг статьи...", parse_mode='HTML') # <-- ИЗМЕНЕНО НА HTML
     
     # 1. Парсинг
     title, article_text = parse_article(url)
@@ -264,8 +265,8 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- ИСПРАВЛЕНИЕ: ПРИНУДИТЕЛЬНОЕ ОБРЕЗАНИЕ ТЕКСТА ---
     if len(post_text) > MAX_POST_LENGTH:
-        post_text = post_text[:MAX_POST_LENGTH] + "\n\n**[...Обрезано из-за лимита Telegram]**"
-        await update.message.reply_text(f"⚠️ **Внимание:** Сгенерированный пост был **обрезан** до {MAX_POST_LENGTH} символов, чтобы соответствовать лимиту подписи Telegram (1024 символа).", parse_mode='Markdown')
+        post_text = post_text[:MAX_POST_LENGTH] + "\n\n<b>[...Обрезано из-за лимита Telegram]</b>"
+        await update.message.reply_text(f"⚠️ <b>Внимание:</b> Сгенерированный пост был <b>обрезан</b> до {MAX_POST_LENGTH} символов, чтобы соответствовать лимиту подписи Telegram (1024 символа).", parse_mode='HTML') # <-- ИЗМЕНЕНО НА HTML
     # ----------------------------------------------------
 
 
@@ -283,17 +284,17 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global draft_post
     draft_post = {'text': post_text, 'image_url': image_url}
     
-    caption_draft = f"**[Черновик]**\n\n{post_text}\n\n/publish для публикации"
+    caption_draft = f"<b>[Черновик]</b>\n\n{post_text}\n\n/publish для публикации"
     
     try:
         await update.message.reply_photo(
             photo=image_url,
             caption=caption_draft,
-            parse_mode='Markdown'
+            parse_mode='HTML' # <-- ИЗМЕНЕНО НА HTML
         )
     except Exception as e:
         logger.error(f"Ошибка отправки фото с подписью: {e}")
-        await update.message.reply_text(f"❌ Изображение не загружено. Ошибка: {e}\n\nТекст черновика:\n{caption_draft}", parse_mode='Markdown')
+        await update.message.reply_text(f"❌ Изображение не загружено. Ошибка: {e}\n\nТекст черновика:\n{caption_draft}", parse_mode='HTML') # <-- ИЗМЕНЕНО НА HTML
 
 @restricted
 async def handle_manual_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -309,7 +310,7 @@ async def handle_manual_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
 
-    await update.message.reply_text("⏳ **Ручной режим активирован.**\n\n1. Передаю текст в GPT-4o...")
+    await update.message.reply_text("⏳ <b>Ручной режим активирован.</b>\n\n1. Передаю текст в GPT-4o...", parse_mode='HTML') # <-- ИЗМЕНЕНО НА HTML
     
     # 1. Генерация текста и промта
     title = "Ручная вставка статьи"
@@ -321,8 +322,8 @@ async def handle_manual_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # --- ИСПРАВЛЕНИЕ: ПРИНУДИТЕЛЬНОЕ ОБРЕЗАНИЕ ТЕКСТА ---
     if len(post_text) > MAX_POST_LENGTH:
-        post_text = post_text[:MAX_POST_LENGTH] + "\n\n**[...Обрезано из-за лимита Telegram]**"
-        await update.message.reply_text(f"⚠️ **Внимание:** Сгенерированный пост был **обрезан** до {MAX_POST_LENGTH} символов, чтобы соответствовать лимиту подписи Telegram (1024 символа).", parse_mode='Markdown')
+        post_text = post_text[:MAX_POST_LENGTH] + "\n\n<b>[...Обрезано из-за лимита Telegram]</b>"
+        await update.message.reply_text(f"⚠️ <b>Внимание:</b> Сгенерированный пост был <b>обрезан</b> до {MAX_POST_LENGTH} символов, чтобы соответствовать лимиту подписи Telegram (1024 символа).", parse_mode='HTML') # <-- ИЗМЕНЕНО НА HTML
     # ----------------------------------------------------
 
     await update.message.reply_text("✅ Текст сгенерирован. 2. Генерирую изображение через DALL-E 3...")
@@ -334,17 +335,17 @@ async def handle_manual_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
     global draft_post
     draft_post = {'text': post_text, 'image_url': image_url}
     
-    caption_draft = f"**[Черновик]**\n\n{post_text}\n\n/publish для публикации"
+    caption_draft = f"<b>[Черновик]</b>\n\n{post_text}\n\n/publish для публикации"
     
     try:
         await update.message.reply_photo(
             photo=image_url,
             caption=caption_draft,
-            parse_mode='Markdown'
+            parse_mode='HTML' # <-- ИЗМЕНЕНО НА HTML
         )
     except Exception as e:
         logger.error(f"Ошибка отправки фото с подписью: {e}")
-        await update.message.reply_text(f"❌ Изображение не загружено. Ошибка: {e}\n\nТекст черновика:\n{caption_draft}", parse_mode='Markdown')
+        await update.message.reply_text(f"❌ Изображение не загружено. Ошибка: {e}\n\nТекст черновика:\n{caption_draft}", parse_mode='HTML') # <-- ИЗМЕНЕНО НА HTML
 
 
 @restricted
@@ -361,7 +362,7 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id=CHANNEL_ID,
             photo=draft_post['image_url'],
             caption=draft_post['text'],
-            parse_mode='Markdown'
+            parse_mode='HTML' # <-- ИЗМЕНЕНО НА HTML
         )
         await update.message.reply_text("🚀 Новость успешно опубликована в канал 'Горизонт событий'!")
         draft_post = {}
