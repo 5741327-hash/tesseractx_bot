@@ -25,8 +25,8 @@ from openai import OpenAI
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# КОНСТАНТА: Максимальная безопасная длина поста, чтобы не превысить лимит Telegram (1024 символа)
-MAX_POST_LENGTH = 1000 
+# ИЗМЕНЕНИЕ: Уменьшение лимита до 900 символов для гарантированного запаса (Лимит Telegram 1024)
+MAX_POST_LENGTH = 900 
 
 # Список актуальных User-Agent'ов для ротации
 USER_AGENTS = [
@@ -159,7 +159,7 @@ def find_image_in_article(url):
 def generate_ai_content(title, raw_text):
     """Обрабатывает текст через GPT-4o для создания поста и промта для DALL-E."""
     
-    # ОБНОВЛЕНИЕ ПРОМТА: Требование структурировать с помощью жирных подзаголовков
+    # ОБНОВЛЕНИЕ ПРОМТА: Установка лимита в 900 символов
     system_prompt = (
         "Ты — ведущий научный журналист и редактор популярного Telegram-канала 'Горизонт событий'. "
         "Твоя задача — превратить сырой текст научной новости в увлекательный, легко читаемый пост. "
@@ -265,6 +265,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- ПРИНУДИТЕЛЬНОЕ ОБРЕЗАНИЕ ТЕКСТА ---
     if len(post_text) > MAX_POST_LENGTH:
         post_text = post_text[:MAX_POST_LENGTH] + "\n\n**[...Обрезано из-за лимита Telegram]**"
+        # Сообщаем об обрезании, используя новый, более высокий запас
         await update.message.reply_text(f"⚠️ **Внимание:** Сгенерированный пост был **обрезан** до {MAX_POST_LENGTH} символов, чтобы соответствовать лимиту подписи Telegram (1024 символа).", parse_mode='Markdown')
     # ----------------------------------------------------
 
@@ -293,7 +294,8 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Ошибка отправки фото с подписью: {e}")
-        await update.message.reply_text(f"❌ Изображение не загружено. Ошибка: {e}\n\nТекст черновика:\n{caption_draft}", parse_mode='Markdown')
+        # Если ошибка все равно произошла, сообщаем полный текст ошибки и черновик
+        await update.message.reply_text(f"❌ Изображение не загружено. Ошибка: {e}\n\nТекст черновика:\n`{caption_draft}`", parse_mode='Markdown')
 
 @restricted
 async def handle_manual_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -322,6 +324,7 @@ async def handle_manual_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # --- ПРИНУДИТЕЛЬНОЕ ОБРЕЗАНИЕ ТЕКСТА ---
     if len(post_text) > MAX_POST_LENGTH:
         post_text = post_text[:MAX_POST_LENGTH] + "\n\n**[...Обрезано из-за лимита Telegram]**"
+        # Сообщаем об обрезании, используя новый, более высокий запас
         await update.message.reply_text(f"⚠️ **Внимание:** Сгенерированный пост был **обрезан** до {MAX_POST_LENGTH} символов, чтобы соответствовать лимиту подписи Telegram (1024 символа).", parse_mode='Markdown')
     # ----------------------------------------------------
 
@@ -344,7 +347,8 @@ async def handle_manual_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
     except Exception as e:
         logger.error(f"Ошибка отправки фото с подписью: {e}")
-        await update.message.reply_text(f"❌ Изображение не загружено. Ошибка: {e}\n\nТекст черновика:\n{caption_draft}", parse_mode='Markdown')
+        # Если ошибка все равно произошла, сообщаем полный текст ошибки и черновик
+        await update.message.reply_text(f"❌ Изображение не загружено. Ошибка: {e}\n\nТекст черновика:\n`{caption_draft}`", parse_mode='Markdown')
 
 
 @restricted
