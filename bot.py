@@ -299,7 +299,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global draft_post
     draft_post = {'text': post_text, 'image_url': image_url}
     
-    caption_draft = f"<b>[Черновик]</b>\n\n{post_text}\n\n/publish для публикации"
+    caption_draft = f"[Черновик]\n\n{post_text}\n\n/publish для публикации"
     
     try:
         await update.message.reply_photo(
