@@ -1,46 +1,46 @@
-import os
-import logging
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+# --- Новый R&D Промпт ---
+SYSTEM_PROMPT = (
+    "Ты — ведущий R&D эксперт по процессам разделения в фармацевтике. "
+    "Твой алгоритм работы:\n"
+    "1. АНАЛИЗ ОБЪЕКТА: Найди активные вещества (АФС) и вспомогательные компоненты. Определи их молекулярный вес и химическую природу.\n"
+    "2. НАУЧНЫЙ КОНТЕКСТ: Найди данные о совместимости мембран (PES, PVDF, PTFE, Nylon, RC) с этими веществами.\n"
+    "3. ТЕХНИЧЕСКОЕ РЕШЕНИЕ: Предложи каскад (от 10 мкм до 0.22/0.1 мкм). Укажи тип мембраны и материал корпуса.\n"
+    "4. РАСЧЕТЫ: Рассчитай требуемую площадь фильтрации (A) по формуле A = V / (J * t), где J — удельный поток (flux). "
+    "Оцени влияние вязкости по закону Дарси: Q = (k * A * ΔP) / (μ * L).\n"
+    "5. ЭКОНОМИКА: Оцени риск преждевременной забиваемости (fouling)."
+)
 
-# Настройка логов
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
+# --- Добавляем функцию поиска научных данных ---
+def get_science_data(query):
+    try:
+        with DDGS() as ddgs:
+            # Ищем конкретно научные статьи и тех. спецификации
+            search_query = f"{query} pharmaceutical filtration technical paper compatibility"
+            results = ddgs.text(search_query, max_results=4)
+            return "\n".join([f"Источник: {r['body']}" for r in results])
+    except:
+        return "Научные данные из сети временно недоступны."
 
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
-PORT = int(os.environ.get("PORT", 10000))
+# --- Обновленный обработчик (теперь с поиском) ---
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_input = update.message.text
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
-async def start(update: Update, context):
-    await update.message.reply_text("🔬 Бот запущен и готов к работе!")
+    # 1. Поиск научной базы по запросу пользователя
+    science_context = get_science_data(user_input[:100])
+    
+    # 2. Парсинг сайта (если есть ссылка)
+    url_match = re.search(r'https?://[^\s]+', user_input)
+    web_data = parse_site(url_match.group(0)) if url_match else ""
 
-async def echo(update: Update, context):
-    await update.message.reply_text(f"Я получил: {update.message.text}")
-
-def main():
-    if not TOKEN or not WEBHOOK_URL:
-        logger.error("Критические переменные отсутствуют!")
-        return
-
-    # Создаем объект приложения
-    application = Application.builder().token(TOKEN).build()
-
-    # Добавляем обработчики
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
-
-    logger.info(f"Запуск Webhook на порту {PORT}")
-
-    # Использование параметров, которые Render гарантированно «проглатывает»
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
-        # Добавляем секретный токен для верификации запросов от Telegram
-        secret_token="A1b2C3d4E5f6G7h8", 
-        drop_pending_updates=True
-    )
-
-if __name__ == '__main__':
-    main()
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o", # Используем мощную модель для расчетов
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"ЗАПРОС: {user_input}\nДАННЫЕ САЙТА: {web_data}\nНАУЧНАЯ БАЗА: {science_context}"}
+            ]
+        )
+        await update.message.reply_text(response.choices[0].message.content)
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка R&D модуля: {e}")
