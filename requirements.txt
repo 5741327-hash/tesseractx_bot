@@ -1,7 +1,6 @@
 # requirements.txt
-python-telegram-bot[webhooks]
+python-telegram-bot
 openai
 requests
 beautifulsoup4
-gunicorn
-
+duckduckgo-search
