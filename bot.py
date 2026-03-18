@@ -4,94 +4,100 @@ import re
 import requests
 from bs4 import BeautifulSoup
 
-# ИМПОРТЫ, КОТОРЫХ НЕ ХВАТАЛО
+# СНАЧАЛА ИМПОРТЫ
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 from openai import OpenAI
 from duckduckgo_search import DDGS
 
-# --- Настройки ---
+# --- Настройки логов ---
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Переменные из Render
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.environ.get("PORT", 10000))
 
+# Инициализация OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- R&D Промпт (Универсальный) ---
+# --- R&D Промпт (Универсальный инженерный уровень) ---
 SYSTEM_PROMPT = (
-    "Ты — ведущий R&D эксперт по процессам разделения и фильтрации в фармацевтике. "
-    "Твой алгоритм анализа:\n"
-    "1. ОПРЕДЕЛЕНИЕ АФС: Найди активные вещества и вспомогательные компоненты. Оцени их химическую природу и pH.\n"
-    "2. ВЯЗКОСТЬ И ТЕМПЕРАТУРА: Оцени динамическую вязкость (μ) и её влияние на поток.\n"
-    "3. МАТЕМАТИКА: Рассчитай требуемую площадь фильтрации (A) по формуле A = V / (J * t). "
-    "Используй типовые значения потока (Flux, J) для разных сред (например, 500-1000 LMH для воды, 50-150 LMH для вязких сред).\n"
-    "4. ВЫБОР МЕМБРАНЫ: Сравни PES, PVDF, PTFE, Nylon. Обоснуй выбор с точки зрения адсорбции и экстрагируемых веществ.\n"
-    "5. КАСКАД: Предложи схему предфильтрации (глубинная фильтрация) перед стерильной мембраной."
+    "Ты — эксперт R&D в области фармацевтической фильтрации. "
+    "Твоя задача: глубокий технический анализ состава и процессов.\n"
+    "1. АНАЛИЗ АФС: Определи химическую совместимость активных веществ с материалами мембран.\n"
+    "2. ФИЗИКО-ХИМИЯ: Оцени вязкость, pH и риск адсорбции.\n"
+    "3. МАТЕМАТИЧЕСКИЙ РАСЧЕТ: Используй формулу A = V / (J * t) для расчета площади фильтрации. "
+    "Оперируй понятиями LMH (L/m2/h) и дифференциальным давлением (dP).\n"
+    "4. ТЕХНОЛОГИЯ: Предложи каскад (предфильтр + стерильная мембрана). Сравни PES, PVDF, PTFE, Nylon.\n"
+    "5. НАУЧНАЯ БАЗА: Опирайся на техданные о сорбции и экстрагируемых веществах."
 )
 
-# --- Функции поиска и парсинга ---
+# --- Вспомогательные функции ---
 def get_science_data(query):
     try:
         with DDGS() as ddgs:
-            # Ищем научные данные и тех. листы
-            results = ddgs.text(f"{query} pharma filtration technical compatibility", max_results=3)
-            return "\n".join([f"- {r['body']}" for r in results])
-    except:
+            results = ddgs.text(f"{query} pharmaceutical filtration technical compatibility", max_results=3)
+            return "\n".join([f"Источник: {r['body']}" for r in results])
+    except Exception as e:
+        logger.error(f"DDGS Error: {e}")
         return "Научные данные временно недоступны."
 
 def parse_site(url):
     try:
         r = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+        r.raise_for_status()
         soup = BeautifulSoup(r.content, 'html.parser')
-        # Берем только важный текст, чтобы не перегружать контекст
-        for script in soup(["script", "style"]): script.extract()
+        for s in soup(["script", "style"]): s.extract()
         return soup.get_text(separator=' ', strip=True)[:3000]
-    except:
+    except Exception as e:
+        logger.error(f"Parsing Error: {e}")
         return None
 
-# --- Обработчики ---
+# --- Обработчики событий ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🧪 R&D модуль активен. Пришлите название препарата, состав или ссылку на производство.")
+    await update.message.reply_text("🧪 R&D Модуль запущен. Я готов анализировать составы, искать научные статьи и считать площади фильтрации. Жду ваш запрос или ссылку.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_input = update.message.text
+    text = update.message.text
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
-    # Поиск ссылки
-    url_match = re.search(r'https?://[^\s]+', user_input)
-    web_data = parse_site(url_match.group(0)) if url_match else ""
+    # Поиск ссылки в сообщении
+    url_match = re.search(r'https?://[^\s]+', text)
+    web_content = parse_site(url_match.group(0)) if url_match else ""
     
-    # Научный контекст через DuckDuckGo
-    science_context = get_science_data(user_input[:100])
+    # Сбор научного контекста
+    science_info = get_science_data(text[:100])
 
     try:
+        # Запрос к GPT-4o
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"ЗАПРОС: {user_input}\nДАННЫЕ САЙТА: {web_data}\nНАУЧНЫЙ ПОИСК: {science_context}"}
+                {"role": "user", "content": f"ЗАПРОС: {text}\nКОНТЕНТ САЙТА: {web_content}\nНАУЧНАЯ БАЗА: {science_info}"}
             ]
         )
         await update.message.reply_text(response.choices[0].message.content)
     except Exception as e:
-        logger.error(f"Error: {e}")
-        await update.message.reply_text("⚠️ Ошибка R&D модуля. Проверьте логи.")
+        logger.error(f"GPT Error: {e}")
+        await update.message.reply_text(f"⚠️ Ошибка R&D модуля: {str(e)}")
 
-# --- Запуск ---
+# --- Основной цикл ---
 def main():
     if not TOKEN or not WEBHOOK_URL:
-        logger.error("Критические переменные отсутствуют!")
+        print("ОШИБКА: Проверьте TELEGRAM_BOT_TOKEN и WEBHOOK_URL")
         return
 
     application = Application.builder().token(TOKEN).build()
+    
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+    logger.info(f"Запуск Webhook на порту {PORT}")
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
