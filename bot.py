@@ -4,96 +4,96 @@ import re
 import requests
 from bs4 import BeautifulSoup
 
-# СНАЧАЛА ИМПОРТЫ
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 from openai import OpenAI
 from duckduckgo_search import DDGS
 
-# --- Настройки логов ---
+# --- Настройки ---
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Переменные из Render
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.environ.get("PORT", 10000))
 
-# Инициализация OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- R&D Промпт (Универсальный инженерный уровень) ---
+# --- Системный промпт для Инженера-Исследователя ---
 SYSTEM_PROMPT = (
-    "Ты — эксперт R&D в области фармацевтической фильтрации. "
-    "Твоя задача: глубокий технический анализ состава и процессов.\n"
-    "1. АНАЛИЗ АФС: Определи химическую совместимость активных веществ с материалами мембран.\n"
-    "2. ФИЗИКО-ХИМИЯ: Оцени вязкость, pH и риск адсорбции.\n"
-    "3. МАТЕМАТИЧЕСКИЙ РАСЧЕТ: Используй формулу A = V / (J * t) для расчета площади фильтрации. "
-    "Оперируй понятиями LMH (L/m2/h) и дифференциальным давлением (dP).\n"
-    "4. ТЕХНОЛОГИЯ: Предложи каскад (предфильтр + стерильная мембрана). Сравни PES, PVDF, PTFE, Nylon.\n"
-    "5. НАУЧНАЯ БАЗА: Опирайся на техданные о сорбции и экстрагируемых веществах."
+    "Ты — ведущий R&D инженер по фильтрации. Твоя цель — выдать конкретное техзадание (ТЗ).\n"
+    "1. ИДЕНТИФИКАЦИЯ: На основе данных поиска и сайта составь список продукции компании.\n"
+    "2. АНАЛИЗ СОСТАВА: Найди активные вещества (АФС) и вспомогательные компоненты (особенно полимеры: ГПМЦ, ПВС, Карбомеры).\n"
+    "3. ТЕХНИЧЕСКИЕ ПАРАМЕТРЫ: Определи вязкость (cP) и pH. Если точных данных нет, используй отраслевые стандарты (напр. 0.3% ГПМЦ = 6 cP).\n"
+    "4. ВЫБОР МЕМБРАНЫ: Укажи конкретные материалы (PES, PVDF, PTFE). Обоснуй выбор (напр. 'PES с низкой сорбцией для сохранения титра АФС').\n"
+    "5. РАСЧЕТ SCALE-UP: Для серии 100л и времени 2ч рассчитай необходимую площадь фильтрации (A = V / (J * t)). "
+    "Учитывай падение потока (Flux) при росте вязкости. Выдай результат в м2.\n"
+    "6. ФОРМАТ: Отвечай строго, структурированно, без воды."
 )
 
-# --- Вспомогательные функции ---
-def get_science_data(query):
-    try:
-        with DDGS() as ddgs:
-            results = ddgs.text(f"{query} pharmaceutical filtration technical compatibility", max_results=3)
-            return "\n".join([f"Источник: {r['body']}" for r in results])
-    except Exception as e:
-        logger.error(f"DDGS Error: {e}")
-        return "Научные данные временно недоступны."
-
+# --- Функции парсинга и поиска ---
 def parse_site(url):
     try:
-        r = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        r = requests.get(url, timeout=15, headers=headers)
         r.raise_for_status()
         soup = BeautifulSoup(r.content, 'html.parser')
-        for s in soup(["script", "style"]): s.extract()
-        return soup.get_text(separator=' ', strip=True)[:3000]
+        # Убираем лишний мусор
+        for s in soup(["script", "style", "nav", "footer"]): s.extract()
+        return soup.get_text(separator=' ', strip=True)[:4000]
     except Exception as e:
-        logger.error(f"Parsing Error: {e}")
-        return None
+        logger.error(f"Ошибка парсинга {url}: {e}")
+        return ""
 
-# --- Обработчики событий ---
+def deep_osint_search(query):
+    try:
+        with DDGS() as ddgs:
+            # Ищем конкретно составы и реестры
+            search_query = f"{query} состав препаратов ГРЛС вспомогательные вещества инструкция"
+            results = ddgs.text(search_query, max_results=5)
+            return "\n".join([f"Найдено в сети: {r['body']}" for r in results])
+    except Exception as e:
+        logger.error(f"Ошибка поиска: {e}")
+        return "Внешние данные не найдены."
+
+# --- Обработчики ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🧪 R&D Модуль запущен. Я готов анализировать составы, искать научные статьи и считать площади фильтрации. Жду ваш запрос или ссылку.")
+    await update.message.reply_text("🔬 R&D Агент запущен. Скиньте название фарм-компании или ссылку на каталог. Я проведу поиск по реестрам и рассчитаю фильтрацию.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+    user_input = update.message.text
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
-    # Поиск ссылки в сообщении
-    url_match = re.search(r'https?://[^\s]+', text)
-    web_content = parse_site(url_match.group(0)) if url_match else ""
+    # 1. Сбор данных из сети (OSINT)
+    osint_data = deep_osint_search(user_input)
     
-    # Сбор научного контекста
-    science_info = get_science_data(text[:100])
+    # 2. Сбор данных с сайта (если есть ссылка)
+    url_match = re.search(r'https?://[^\s]+', user_input)
+    site_data = parse_site(url_match.group(0)) if url_match else ""
 
     try:
-        # Запрос к GPT-4o
+        # 3. Генерация экспертного ответа
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"ЗАПРОС: {text}\nКОНТЕНТ САЙТА: {web_content}\nНАУЧНАЯ БАЗА: {science_info}"}
+                {"role": "user", "content": f"ОБЪЕКТ: {user_input}\nДАННЫЕ ИЗ РЕЕСТРОВ: {osint_data}\nДАННЫЕ САЙТА: {site_data}"}
             ]
         )
         await update.message.reply_text(response.choices[0].message.content)
     except Exception as e:
         logger.error(f"GPT Error: {e}")
-        await update.message.reply_text(f"⚠️ Ошибка R&D модуля: {str(e)}")
+        await update.message.reply_text(f"⚠️ Ошибка анализа: {str(e)}")
 
-# --- Основной цикл ---
+# --- Запуск приложения ---
 def main():
     if not TOKEN or not WEBHOOK_URL:
-        print("ОШИБКА: Проверьте TELEGRAM_BOT_TOKEN и WEBHOOK_URL")
+        print("Ошибка: Проверьте переменные окружения!")
         return
 
     application = Application.builder().token(TOKEN).build()
-    
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
