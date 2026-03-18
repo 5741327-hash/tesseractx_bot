@@ -138,8 +138,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- 7. Запуск (Webhook для Render) ---
 def main():
+    # 1. Инициализация приложения
+    # Используем билд без автоматического запуска, чтобы настроить параметры
     app = Application.builder().token(TOKEN).build()
     
+    # 2. Регистрация ваших обработчиков
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("wake", wake))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
@@ -147,16 +150,19 @@ def main():
     PORT = int(os.environ.get("PORT", 8080))
     
     if WEBHOOK_URL:
-        logger.info(f"Запуск Webhook на порту {PORT}")
+        logger.info(f"Запуск Webhook: {WEBHOOK_URL} на порту {PORT}")
+        
+        # КЛЮЧЕВОЙ МОМЕНТ: drop_pending_updates=True убирает конфликт
         app.run_webhook(
             listen="0.0.0.0",
             port=PORT,
             url_path=TOKEN,
-            webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
+            webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
+            drop_pending_updates=True 
         )
     else:
-        logger.info("Запуск Polling")
-        app.run_polling()
+        logger.info("Запуск Polling (локальный режим)")
+        app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
