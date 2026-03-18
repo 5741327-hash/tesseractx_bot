@@ -5,91 +5,127 @@ import random
 import requests
 from functools import wraps
 from bs4 import BeautifulSoup
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from openai import OpenAI
 
-# --- 1. Настройка ---
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes
+)
+
+from openai import OpenAI
+from duckduckgo_search import DDGS
+
+# --- 1. Настройка и Инициализация ---
+
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-]
-
+# Чтение переменных окружения
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
+
+# Хранилище контекста: {user_id: [messages]}
 user_conversations = {}
 
-# --- 2. Глубокий системный промпт ---
+# --- 2. Системный промпт (Инженерная база знаний) ---
+
 SYSTEM_PROMPT = (
-    "Ты — эксперт-технолог фармацевтического производства и специалист по микробиологической фильтрации. "
-    "Твоя задача: на основе данных о препаратах заказчика составить техническое предложение.\n\n"
-    "АЛГОРИТМ ТВОЕЙ РАБОТЫ:\n"
-    "1. Выдели конкретные препараты и их действующие вещества (АФС).\n"
-    "2. Определи физико-химические свойства: вязкость, pH, чувствительность к температуре, наличие белков (адсорбция).\n"
-    "3. Предложи схему фильтрации для каждого типа продукта:\n"
-    "   - Глубинная фильтрация (осветление).\n"
-    "   - Предфильтрация (защита стерилизующего слоя).\n"
-    "   - Финальная стерилизующая фильтрация (0.22 мкм).\n"
-    "4. Обоснуй выбор материала мембраны:\n"
-    "   - PES (ПЭС): для водных растворов, белков (низкая адсорбция).\n"
-    "   - PVDF (ПВДФ): для агрессивных сред, органики, газов.\n"
-    "   - PTFE (Фторопласт): для воздуха и сильных растворителей.\n"
-    "   - Nylon (Нейлон): для спиртовых растворов и щелочей.\n\n"
-    "Если данных на сайте недостаточно, используй свои знания о технологии производства аналогичных лекарственных форм."
+    "Ты — эксперт-технолог фармацевтической фильтрации и R&D консультант. "
+    "Твоя задача: анализировать сайт заказчика, выявлять препараты и их действующие вещества (АФС), "
+    "искать научные данные о проблемах их фильтрации и предлагать решения.\n\n"
+    "ТВОЯ ЛОГИКА:\n"
+    "1. Изучи препараты. Если это белки (антитела), учитывай риск сорбции. Если вязкие растворы — подбирай префильтры.\n"
+    "2. Используй предоставленные результаты научного поиска для обоснования выбора мембраны (PES, PVDF, PTFE, Nylon).\n"
+    "3. Для расчетов используй формулу: Площадь A = Q / (V_flux * t).\n"
+    "4. Давай рекомендации по валидации (Extractables/Leachables) и тестам на целостность.\n"
+    "\nОтвечай профессионально, структурированно, с акцентом на химическую совместимость и стерильность."
 )
 
-# --- 3. Функции парсинга и защиты ---
-def restricted(func):
-    @wraps(func)
-    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        if str(update.effective_user.id) != ADMIN_ID:
-            await update.message.reply_text("⛔️ Доступ ограничен.")
-            return
-        return await func(update, context, *args, **kwargs)
-    return wrapped
+# --- 3. Функции поиска и парсинга ---
+
+def search_scientific_insights(keywords):
+    """Ищет научные и технические данные в сети."""
+    search_results = ""
+    try:
+        with DDGS() as ddgs:
+            # Ищем на английском для лучшего качества тех. документации
+            query = f"{keywords} pharmaceutical filtration membrane adsorption compatibility"
+            results = ddgs.text(query, max_results=3)
+            for r in results:
+                search_results += f"\n- {r['title']}: {r['body']}"
+    except Exception as e:
+        logger.error(f"Ошибка поиска: {e}")
+    return search_results
 
 def parse_website(url):
+    """Парсит текст сайта заказчика."""
     try:
-        headers = {'User-Agent': random.choice(USER_AGENTS)}
-        response = requests.get(url, headers=headers, timeout=20)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Убираем лишнее, оставляем только смысловые блоки
-        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
             tag.decompose()
             
-        # Ищем текст в заголовках и параграфах, где обычно описаны продукты
-        content = []
-        for tag in soup.find_all(['h1', 'h2', 'h3', 'p', 'li']):
-            content.append(tag.get_text(strip=True))
-            
-        return " ".join(content)[:8000] # Больше лимит для глубокого анализа
+        text = soup.get_text(separator=' ', strip=True)
+        return text[:7000] # Ограничение для контекста
     except Exception as e:
         logger.error(f"Ошибка парсинга {url}: {e}")
         return None
 
-# --- 4. Логика обработки сообщений ---
-async def get_ai_response(user_id, content, is_url=False):
+# --- 4. Декоратор доступа ---
+
+def restricted(func):
+    @wraps(func)
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        if str(update.effective_user.id) != ADMIN_ID:
+            await update.message.reply_text("⛔️ Доступ запрещен.")
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapped
+
+# --- 5. Основная логика ИИ ---
+
+async def handle_request(user_id, user_input, is_url=False):
     if user_id not in user_conversations:
         user_conversations[user_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    
-    if is_url:
-        site_data = parse_website(content)
-        if not site_data:
-            return "Не удалось прочитать сайт. Возможно, стоит защита от ботов."
-        prompt_content = f"Изучи этот текст с сайта производителя. Найди названия препаратов, их состав и предложи решения по фильтрации:\n\n{site_data}"
-    else:
-        prompt_content = content
 
-    user_conversations[user_id].append({"role": "user", "content": prompt_content})
+    # 1. Получаем первичные данные
+    context_data = ""
+    if is_url:
+        site_text = parse_website(user_input)
+        if not site_text:
+            return "Не удалось получить данные с сайта. Проверьте ссылку или вставьте текст вручную."
+        context_data = f"Данные с сайта заказчика: {site_text}"
+    else:
+        context_data = user_input
+
+    # 2. Извлекаем ключевые слова для научного поиска через быстрый запрос к GPT
+    kw_response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": f"Выдели только названия лекарственных веществ (АФС) для поиска проблем их фильтрации: {context_data}"}]
+    )
+    keywords = kw_response.choices[0].message.content
+
+    # 3. Ищем научные статьи/кейсы
+    science_data = search_scientific_insights(keywords)
     
+    # 4. Формируем финальный запрос для ИИ
+    final_input = (
+        f"ИСХОДНЫЕ ДАННЫЕ: {context_data}\n\n"
+        f"НАУЧНЫЙ КОНТЕКСТ (из сети): {science_data}\n\n"
+        "Проанализируй препараты, учти научные данные и предложи схему фильтрации."
+    )
+
+    user_conversations[user_id].append({"role": "user", "content": final_input})
+
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -97,19 +133,36 @@ async def get_ai_response(user_id, content, is_url=False):
         )
         answer = response.choices[0].message.content
         user_conversations[user_id].append({"role": "assistant", "content": answer})
+        
+        # Обрезка контекста для экономии токенов
+        if len(user_conversations[user_id]) > 12:
+            user_conversations[user_id] = [user_conversations[user_id][0]] + user_conversations[user_id][-10:]
+            
         return answer
     except Exception as e:
-        return f"Ошибка AI: {str(e)}"
+        logger.error(f"OpenAI Error: {e}")
+        return "Ошибка при генерации ответа."
 
-# --- 5. Обработчики Telegram ---
+# --- 6. Обработчики команд ---
+
 @restricted
-async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🔬 **Система микробиологической фильтрации 2.0**\n\n"
+        "Отправьте ссылку на сайт заказчика или список препаратов. "
+        "Я найду научные статьи о компонентах и предложу решение.\n\n"
+        "Команды:\n"
+        "/wake — начать новую консультацию\n"
+    )
+
+@restricted
+async def wake_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_conversations[user_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    await update.message.reply_text("🧬 Контекст сброшен. Пришлите ссылку на сайт или название препарата для анализа техпроцесса.")
+    await update.message.reply_text("✨ Контекст очищен. Я готов к новому анализу!")
 
 @restricted
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
     url_match = re.search(r'https?://[^\s]+', text)
@@ -118,21 +171,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if url_match:
         url = url_match.group(0)
-        await update.message.reply_text(f"🚀 Анализирую продуктовый портфель на {url}...")
-        res = await get_ai_response(user_id, url, is_url=True)
+        await update.message.reply_text("🔎 Сканирую сайт и ищу научные статьи по компонентам...")
+        answer = await handle_request(user_id, url, is_url=True)
     else:
-        res = await get_ai_response(user_id, text)
+        answer = await handle_request(user_id, text)
 
-    await update.message.reply_text(res)
+    await update.message.reply_text(answer)
 
-# --- 6. Старт ---
+# --- 7. Запуск ---
+
 def main():
     app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("wake", wake))
-    app.add_handler(CommandHandler("start", wake))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("Бот запущен...")
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("wake", wake_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    
+    print("Бот запущен. Ожидание сообщений...")
     app.run_polling()
 
 if __name__ == '__main__':
